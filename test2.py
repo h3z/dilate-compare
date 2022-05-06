@@ -12,13 +12,16 @@ import math
 
 gamma = 0.001
 
+TIMESTEPS = 144
+
 
 class TMP:
     def __init__(self) -> None:
         self.aaa = datetime.now()
 
-    def ppp(self, i):
-        # print("\t", i, datetime.now() - self.aaa, datetime.now())
+    def ppp(self, i=None):
+        if i:
+            print("\t", i, datetime.now() - self.aaa)
         self.aaa = datetime.now()
 
 
@@ -26,44 +29,21 @@ tmp = TMP()
 
 
 @cuda.jit
-def cuda_compute(vs, next_vs, next_qs):
-    iiii = cuda.threadIdx.x
-    # iiii = 0
-    arr0 = -vs[iiii * 2]
-    arr1 = -vs[iiii * 2 + 1]
-    arr2 = -vs[iiii * 2 + 2]
-    # my min
-    # use the log-sum-exp trick
-    my_min_max_x = max(arr0, arr1, arr2)
-    # my_min_arr = [0] * 3
-    arr0 = math.exp((arr0 - my_min_max_x) / gamma)
-    arr1 = math.exp((arr1 - my_min_max_x) / gamma)
-    arr2 = math.exp((arr2 - my_min_max_x) / gamma)
-    # exp_x = np.exp((x - max_x) / gamma)
-    my_min_Z = arr0 + arr1 + arr2
-    arr0 /= my_min_Z
-    arr1 /= my_min_Z
-    arr2 /= my_min_Z
-    v = -(gamma * math.log(my_min_Z) + my_min_max_x)
-    next_qs[iiii, 0] = arr0
-    next_qs[iiii, 1] = arr1
-    next_qs[iiii, 2] = arr2
+# def cuda_compute2(V, Q, l, theta, iiii):
+def cuda_compute2(V, Q, l, theta, part, fix):
+    iiii = cuda.threadIdx.x + fix
 
-    # v, Q[i, j] = my_min(temp, gamma)
-    # v = 1
+    if iiii >= l:
+        cuda.syncthreads()
+        return
 
-    next_vs[iiii] = v
+    if part == 1:
+        y = iiii + 1
+        x = l - y + 1
+    elif part == 2:
+        x = TIMESTEPS + 1 - l + iiii
+        y = 2 * TIMESTEPS - l - x + 1
 
-
-# @cuda.jit
-def cuda_compute2(V, Q, l, theta, iiii):
-    # def cuda_compute2(V, Q, l, theta):
-    # iiii = cuda.threadIdx.x
-
-    y = iiii + 1
-    x = l - y + 1
-
-    # iiii = 0
     arr0 = -V[x, y - 1]
     arr1 = -V[x - 1, y - 1]
     arr2 = -V[x - 1, y]
@@ -85,14 +65,17 @@ def cuda_compute2(V, Q, l, theta, iiii):
     Q[x, y, 1] = arr1
     Q[x, y, 2] = arr2
 
-    # next_vs[iiii] = v
     V[x, y] = v + theta[x - 1, y - 1]
+
+    cuda.syncthreads()
 
 
 def dtw_grad2(theta, gamma=0.001):
     # for _ in range(300):
     while True:
-        GRID_SIZE = 1
+        start = datetime.now()
+        GRID_SIZE = 400_000
+        # GRID_SIZE = 1
         m = theta.shape[0]
         n = theta.shape[1]
         V = np.zeros((m + 1, n + 1))
@@ -103,70 +86,49 @@ def dtw_grad2(theta, gamma=0.001):
         Q = np.zeros((m + 2, n + 2, 3))
 
         N = m + 1
-        total = datetime.now() - datetime.now()
-        sub_total = datetime.now() - datetime.now()
+
+        dV = cuda.to_device(V)
+        dQ = cuda.to_device(Q)
+        dtheta = cuda.to_device(theta)
+
+        s = 128 + 32
+
+        tmp.ppp()
         for i in range(1, N):
-            start = datetime.now()
-            vs = []
-            for j in range(i):
-                # print(f"({i-j}, {j})", end=" ")
-                vs.append(V[i - j, j])
-                vs.append(V[i - j - 1, j])
-            vs.append(V[i - j - 1, j + 1])
+            for fix in range(i // s + 1):
+                cuda_compute2[GRID_SIZE, s](dV, dQ, i, dtheta, 1, fix * s)
+            nb.cuda.synchronize()
 
-            next_vs = np.zeros(i)
-            next_qs = np.array([[0, 0, 0] for i in range(i)])
-            sub_start = datetime.now()
-            # cuda_compute[GRID_SIZE, len(next_vs)](np.array(vs), next_vs, next_qs)
-            # cuda_compute2[GRID_SIZE, len(next_vs)](
-            #     np.array(V), np.array(Q), len(next_vs), theta
-            # )
-            for iiii in range(len(next_vs)):
-                cuda_compute2(V, np.array(Q), len(next_vs), theta, iiii)
-            sub_total += datetime.now() - sub_start
+        nb.cuda.synchronize()
+        tmp.ppp("1   end: ")
 
-            # for j in range(i):
-            #     # print(f"({i+1-j:2d}, {j:2d}),", end=" ")
-            #     Q[i - j, j + 1] = next_qs[j]
-            #     V[i - j, j + 1] = next_vs[j] + theta[i - j - 1, j]
+        tmp.ppp()
+        for i in range(N - 1, 0, -1):
+            for fix in range(i // s + 1):
+                cuda_compute2[GRID_SIZE, s](dV, dQ, i, dtheta, 2, fix * s)
+            # cuda_compute2[GRID_SIZE, i](dV, dQ, i, dtheta, 2)
 
-            total += datetime.now() - start
-
-        print(f"---> {sub_total}, {sub_total / total:.3f}")
-        for i in range(N, 2 * N - 2):
-            vs = []
-            for j in range(i - N + 1, N - 1):
-                # print(f"({i-j:2d}, {j:2d}), ({i-j-1:2d}, {j:2d})", end=" ")
-                vs.append(V[i - j, j])
-                vs.append(V[i - j - 1, j])
-            # print(f"({i-j-1:2d}, {j+1:2d})")
-            vs.append(V[i - j - 1, j + 1])
-
-            next_vs = np.zeros(2 * N - i - 2)
-            next_qs = np.array([[0, 0, 0] for i in range(2 * N - i - 2)])
-            cuda_compute[GRID_SIZE, len(next_vs)](np.array(vs), next_vs, next_qs)
-
-            for j in range(i - N + 1, N - 1):
-                # print(j, end=" ")
-                # print(f"({i-j:2d}, {j+1:2d}),", end=" ")
-                Q[i - j, j + 1] = next_qs[j - i + N - 1]
-                V[i - j, j + 1] = next_vs[j - i + N - 1] + theta[i - j - 1, j]
+        V = dV.copy_to_host()
+        Q = dQ.copy_to_host()
+        nb.cuda.synchronize()
+        tmp.ppp("2   end: ")
 
         E = np.zeros((m + 2, n + 2))
-        # E[m + 1, :] = 0
-        # E[:, n + 1] = 0
-        # E[m + 1, n + 1] = 1
-        # Q[m + 1, n + 1] = 1
+        E[m + 1, :] = 0
+        E[:, n + 1] = 0
+        E[m + 1, n + 1] = 1
+        Q[m + 1, n + 1] = 1
 
-        # for i in range(m, 0, -1):
-        #     for j in range(n, 0, -1):
-        #         E[i, j] = (
-        #             Q[i, j + 1, 0] * E[i, j + 1]
-        #             + Q[i + 1, j + 1, 1] * E[i + 1, j + 1]
-        #             + Q[i + 1, j, 2] * E[i + 1, j]
-        #         )
+        for i in range(m, 0, -1):
+            for j in range(n, 0, -1):
+                E[i, j] = (
+                    Q[i, j + 1, 0] * E[i, j + 1]
+                    + Q[i + 1, j + 1, 1] * E[i + 1, j + 1]
+                    + Q[i + 1, j, 2] * E[i + 1, j]
+                )
 
         # return V[m, n], E[1 : m + 1, 1 : n + 1], Q, E
+        # print(datetime.now() - start)
 
 
 def timer(func):

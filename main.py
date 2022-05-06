@@ -1,4 +1,4 @@
-from data import DataReader
+from data_reader import DataReader
 from dilate.dilate import dilate_loss
 import torch
 
@@ -6,11 +6,11 @@ import torch
 if __name__ == "__main__":
 
     dr = DataReader()
-    df = dr.train.query("id == 1")
+    df = dr.train.query("TurbID == 1")
 
     windows = []
     window_size = 144
-    for i in range(df.shape[0]):
+    for i in range(df.shape[0] - window_size):
         windows.append(df.iloc[i : i + window_size, -1].values)
 
     loss = dilate_loss(alpha=0.5, gamma=0.001)
