@@ -26,7 +26,7 @@ if __name__ == "__main__":
                 .view(batch, -1, 1)
             )
             j = (
-                torch.tensor(windows[j : j + batch], requires_grad=True)
+                torch.tensor(windows[j + 1 : j + 1 + batch], requires_grad=True)
                 .to("cuda")
                 .view(batch, -1, 1)
             )
