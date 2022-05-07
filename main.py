@@ -1,37 +1,18 @@
-from data_reader import DataReader
+from data.data import DataReader
 from dilate.dilate import dilate_loss
-import torch
-
+import torch, pickle
+import numpy as np
 
 if __name__ == "__main__":
 
-    dr = DataReader()
-    df = dr.train.query("TurbID == 1")
+    # dr = DataReader()
+    # df = dr.train.query("TurbID == 1")
 
-    windows = []
-    window_size = 144
-    for i in range(df.shape[0] - window_size):
-        windows.append(df.iloc[i : i + window_size, -1].values)
-
-    loss = dilate_loss(alpha=0.5, gamma=0.001)
-    mse = torch.nn.MSELoss()
-
-    batch = 1
-
-    for i, _ in enumerate(windows):
-        for j, _ in enumerate(windows):
-            i = (
-                torch.tensor(windows[i : i + batch], requires_grad=True)
-                .to("cuda")
-                .view(batch, -1, 1)
-            )
-            j = (
-                torch.tensor(windows[j + 1 : j + 1 + batch], requires_grad=True)
-                .to("cuda")
-                .view(batch, -1, 1)
-            )
-            l = loss(i, j)
-            # mse(i, j)
-            # l.backward()
-            break
-        break
+    # windows = []
+    # window_size = 144
+    # for i in range(df.shape[0] - window_size):
+    #     windows.append(df.iloc[i : i + window_size, -1].values)
+    windows = pickle.load(open("data/input.pkl", "rb"))
+    for w in windows:
+        w[np.isnan(w)] = 0
+    dilate_loss(windows)

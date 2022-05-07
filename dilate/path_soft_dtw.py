@@ -1,166 +1,148 @@
-from re import I
 import numpy as np
-import torch
-from torch.autograd import Function
-from numba import jit
-
-
-@jit(nopython=True)
-def my_max(x, gamma):
-    # use the log-sum-exp trick
-    max_x = np.max(x)
-    exp_x = np.exp((x - max_x) / gamma)
-    Z = np.sum(exp_x)
-    return gamma * np.log(Z) + max_x, exp_x / Z
-
-
-@jit(nopython=True)
-def my_min(x, gamma):
-    min_x, argmax_x = my_max(-x, gamma)
-    return -min_x, argmax_x
-
-
-@jit(nopython=True)
-def my_max_hessian_product(p, z, gamma):
-    return (p * z - p * np.sum(p * z)) / gamma
-
-
-@jit(nopython=True)
-def my_min_hessian_product(p, z, gamma):
-    return -my_max_hessian_product(p, z, gamma)
-
-
-@jit(nopython=True)
-def dtw_grad(theta, gamma):
-    m = theta.shape[0]
-    n = theta.shape[1]
-    V = np.zeros((m + 1, n + 1))
-    V[:, 0] = 1e10
-    V[0, :] = 1e10
-    V[0, 0] = 0
-
-    Q = np.zeros((m + 2, n + 2, 3))
-
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            # theta is indexed starting from 0.
-            v, Q[i, j] = my_min(
-                np.array([V[i, j - 1], V[i - 1, j - 1], V[i - 1, j]]), gamma
-            )
-            V[i, j] = theta[i - 1, j - 1] + v
-
-    E = np.zeros((m + 2, n + 2))
-    E[m + 1, :] = 0
-    E[:, n + 1] = 0
-    E[m + 1, n + 1] = 1
-    Q[m + 1, n + 1] = 1
-
-    for i in range(m, 0, -1):
-        for j in range(n, 0, -1):
-            E[i, j] = (
-                Q[i, j + 1, 0] * E[i, j + 1]
-                + Q[i + 1, j + 1, 1] * E[i + 1, j + 1]
-                + Q[i + 1, j, 2] * E[i + 1, j]
-            )
-
-    return V[m, n], E[1 : m + 1, 1 : n + 1], Q, E
-
-
-@jit(nopython=True)
-def dtw_hessian_prod(theta, Z, Q, E, gamma):
-    m = Z.shape[0]
-    n = Z.shape[1]
-
-    V_dot = np.zeros((m + 1, n + 1))
-    V_dot[0, 0] = 0
-
-    Q_dot = np.zeros((m + 2, n + 2, 3))
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            # theta is indexed starting from 0.
-            V_dot[i, j] = (
-                Z[i - 1, j - 1]
-                + Q[i, j, 0] * V_dot[i, j - 1]
-                + Q[i, j, 1] * V_dot[i - 1, j - 1]
-                + Q[i, j, 2] * V_dot[i - 1, j]
-            )
-
-            v = np.array([V_dot[i, j - 1], V_dot[i - 1, j - 1], V_dot[i - 1, j]])
-            Q_dot[i, j] = my_min_hessian_product(Q[i, j], v, gamma)
-    E_dot = np.zeros((m + 2, n + 2))
-
-    for j in range(n, 0, -1):
-        for i in range(m, 0, -1):
-            E_dot[i, j] = (
-                Q_dot[i, j + 1, 0] * E[i, j + 1]
-                + Q[i, j + 1, 0] * E_dot[i, j + 1]
-                + Q_dot[i + 1, j + 1, 1] * E[i + 1, j + 1]
-                + Q[i + 1, j + 1, 1] * E_dot[i + 1, j + 1]
-                + Q_dot[i + 1, j, 2] * E[i + 1, j]
-                + Q[i + 1, j, 2] * E_dot[i + 1, j]
-            )
-
-    return V_dot[m, n], E_dot[1 : m + 1, 1 : n + 1]
-
-
+import math
+from numba import jit, cuda
+import numba as nb
 from datetime import datetime
+
+TIMESTEPS = 144
+gamma = 0.001
+
+
+@cuda.jit
+# def cuda_compute2(V, Q, l, theta, iiii):
+def cuda_compute2(V, Q, l, theta, part, fix):
+    # bi = cuda.blockIdx.x
+    bi = 0
+    iiii = cuda.threadIdx.x + fix
+
+    if iiii >= l:
+        cuda.syncthreads()
+        return
+
+    V = V[bi]
+    Q = Q[bi]
+    theta = theta[bi]
+
+    if part == 1:
+        y = iiii + 1
+        x = l - y + 1
+    elif part == 2:
+        x = TIMESTEPS + 1 - l + iiii
+        y = 2 * TIMESTEPS - l - x + 1
+
+    arr0 = -V[x, y - 1]
+    arr1 = -V[x - 1, y - 1]
+    arr2 = -V[x - 1, y]
+    # my min
+    # use the log-sum-exp trick
+    my_min_max_x = max(arr0, arr1, arr2)
+    # my_min_arr = [0] * 3
+    arr0 = math.exp((arr0 - my_min_max_x) / gamma)
+    arr1 = math.exp((arr1 - my_min_max_x) / gamma)
+    arr2 = math.exp((arr2 - my_min_max_x) / gamma)
+    # exp_x = np.exp((x - max_x) / gamma)
+    my_min_Z = arr0 + arr1 + arr2
+    arr0 /= my_min_Z
+    arr1 /= my_min_Z
+    arr2 /= my_min_Z
+    v = -(gamma * math.log(my_min_Z) + my_min_max_x)
+
+    Q[x, y, 0] = arr0
+    Q[x, y, 1] = arr1
+    Q[x, y, 2] = arr2
+
+    V[x, y] = v + theta[x - 1, y - 1]
+
+    cuda.syncthreads()
+
+
+@cuda.jit
+def cuda_E(Q, E, batch, N):
+    x = cuda.grid(1)
+    if x >= batch:
+        return
+
+    Q[x, N, N] = 1
+    for i in range(N - 1, 0, -1):
+        for j in range(N - 1, 0, -1):
+            E[x, i, j] = (
+                Q[x, i, j + 1, 0] * E[x, i, j + 1]
+                + Q[x, i + 1, j + 1, 1] * E[x, i + 1, j + 1]
+                + Q[x, i + 1, j, 2] * E[x, i + 1, j]
+            )
 
 
 class TMP:
     def __init__(self) -> None:
         self.aaa = datetime.now()
 
-    def ppp(self, i):
-        # print("\t", i, datetime.now() - self.aaa, datetime.now())
+    def ppp(self, i=None):
+        if i:
+            print(i, datetime.now() - self.aaa)
         self.aaa = datetime.now()
 
 
 tmp = TMP()
 
 
-class PathDTWBatch(Function):
-    @staticmethod
-    def forward(ctx, D, gamma):  # D.shape: [batch_size, N , N]
+def compute_dilate_path(theta, gamma=0.001):
+    # GRID_SIZE = 400_000
+    # GRID_SIZE = 1
+    while True:
         tmp.ppp(1)
-        batch_size, N, N = D.shape
-        device = D.device
-        D_cpu = D.detach().cpu().numpy()
-        gamma_gpu = torch.FloatTensor([gamma]).to(device)
+        start = datetime.now()
+        batch = theta.shape[0]
 
-        grad_gpu = torch.zeros((batch_size, N, N)).to(device)
-        Q_gpu = torch.zeros((batch_size, N + 2, N + 2, 3)).to(device)
-        E_gpu = torch.zeros((batch_size, N + 2, N + 2)).to(device)
+        N = theta.shape[1] + 1
+        Q = np.zeros((batch, N + 1, N + 1, 3))
+        V = np.zeros((batch, N, N))
+        V[:, :, 0] = 1e10
+        V[:, 0, :] = 1e10
+        V[:, 0, 0] = 0
 
-        for k in range(0, batch_size):  # loop over all D in the batch
-            tmp.ppp(2)
-            _, grad_cpu_k, Q_cpu_k, E_cpu_k = dtw_grad(D_cpu[k, :, :], gamma)
-            tmp.ppp(3)
-            grad_gpu[k, :, :] = torch.FloatTensor(grad_cpu_k).to(device)
-            Q_gpu[k, :, :, :] = torch.FloatTensor(Q_cpu_k).to(device)
-            E_gpu[k, :, :] = torch.FloatTensor(E_cpu_k).to(device)
-        tmp.ppp(4)
-        ctx.save_for_backward(grad_gpu, D, Q_gpu, E_gpu, gamma_gpu)
-        tmp.ppp(5)
-        r = torch.mean(grad_gpu, dim=0)
-        tmp.ppp(6)
-        return r
+        tmp.ppp()
+        dV = cuda.to_device(V)
+        print(dV.alloc_size / 1024 / 1024)
+        tmp.ppp(8)
+        dQ = cuda.to_device(Q)
+        print(dQ.alloc_size / 1024 / 1024)
+        tmp.ppp(9)
+        dtheta = cuda.to_device(theta)
+        print(dtheta.alloc_size / 1024 / 1024)
+        tmp.ppp(10)
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        device = grad_output.device
-        grad_gpu, D_gpu, Q_gpu, E_gpu, gamma = ctx.saved_tensors
-        D_cpu = D_gpu.detach().cpu().numpy()
-        Q_cpu = Q_gpu.detach().cpu().numpy()
-        E_cpu = E_gpu.detach().cpu().numpy()
-        gamma = gamma.detach().cpu().numpy()[0]
-        Z = grad_output.detach().cpu().numpy()
+        print("cp mem", datetime.now() - start)
+        continue
 
-        batch_size, N, N = D_cpu.shape
-        Hessian = torch.zeros((batch_size, N, N)).to(device)
-        for k in range(0, batch_size):
-            _, hess_k = dtw_hessian_prod(
-                D_cpu[k, :, :], Z, Q_cpu[k, :, :, :], E_cpu[k, :, :], gamma
-            )
-            Hessian[k : k + 1, :, :] = torch.FloatTensor(hess_k).to(device)
+        s = 1024
 
-        return Hessian, None
+        for i in range(1, N):
+            for fix in range(i // s + 1):
+                cuda_compute2[batch, s](dV, dQ, i, dtheta, 1, fix * s)
+            nb.cuda.synchronize()
+
+        nb.cuda.synchronize()
+
+        for i in range(N - 1, 0, -1):
+            for fix in range(i // s + 1):
+                cuda_compute2[batch, s](dV, dQ, i, dtheta, 2, fix * s)
+
+        # V = dV.copy_to_host()
+        # Q = dQ.copy_to_host()
+        nb.cuda.synchronize()
+
+        E = np.zeros((batch, N + 1, N + 1))
+        E[:, N, :] = 0
+        E[:, :, N] = 0
+        E[:, N, N] = 1
+
+        dE = cuda.to_device(E)
+
+        cuda_E[batch // 1024 + 1, 1024](dQ, dE, batch, N)
+        E = dE.copy_to_host()
+
+        print(datetime.now() - start)
+
+        # break
+
+    return E[:, 1:N, 1:N]
