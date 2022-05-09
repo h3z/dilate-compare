@@ -10,17 +10,18 @@ gamma = 0.001
 
 @cuda.jit
 # def cuda_compute2(V, Q, l, theta, iiii):
-def cuda_compute2(V, Q, l, theta, part, fix):
-    # bi = cuda.blockIdx.x
-    bi = 0
-    iiii = cuda.threadIdx.x + fix
+def cuda_compute2(V, Q, l, theta, part):
+    bi = cuda.blockIdx.x
+    # bi = 0
+    iiii = cuda.threadIdx.x
 
     if iiii >= l:
-        cuda.syncthreads()
         return
 
     V = V[bi]
     Q = Q[bi]
+    V[1:, 0] = 1e10
+    V[0, 1:] = 1e10
     theta = theta[bi]
 
     if part == 1:
@@ -52,8 +53,6 @@ def cuda_compute2(V, Q, l, theta, part, fix):
     Q[x, y, 2] = arr2
 
     V[x, y] = v + theta[x - 1, y - 1]
-
-    cuda.syncthreads()
 
 
 @cuda.jit
@@ -94,38 +93,23 @@ def compute_dilate_path(theta, gamma=0.001):
         batch = theta.shape[0]
 
         N = theta.shape[1] + 1
-        Q = np.zeros((batch, N + 1, N + 1, 3))
-        V = np.zeros((batch, N, N))
-        V[:, :, 0] = 1e10
-        V[:, 0, :] = 1e10
-        V[:, 0, 0] = 0
 
-        tmp.ppp()
-        dV = cuda.to_device(V)
-        print(dV.alloc_size / 1024 / 1024)
-        tmp.ppp(8)
-        dQ = cuda.to_device(Q)
-        print(dQ.alloc_size / 1024 / 1024)
-        tmp.ppp(9)
+        dV = nb.cuda.device_array(shape=(batch, N, N))
+        dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3))
         dtheta = cuda.to_device(theta)
-        print(dtheta.alloc_size / 1024 / 1024)
-        tmp.ppp(10)
 
         print("cp mem", datetime.now() - start)
-        continue
+        # continue
 
         s = 1024
 
         for i in range(1, N):
-            for fix in range(i // s + 1):
-                cuda_compute2[batch, s](dV, dQ, i, dtheta, 1, fix * s)
-            nb.cuda.synchronize()
+            cuda_compute2[batch, i](dV, dQ, i, dtheta, 1)
 
         nb.cuda.synchronize()
 
         for i in range(N - 1, 0, -1):
-            for fix in range(i // s + 1):
-                cuda_compute2[batch, s](dV, dQ, i, dtheta, 2, fix * s)
+            cuda_compute2[batch, i](dV, dQ, i, dtheta, 2)
 
         # V = dV.copy_to_host()
         # Q = dQ.copy_to_host()
@@ -141,8 +125,8 @@ def compute_dilate_path(theta, gamma=0.001):
         cuda_E[batch // 1024 + 1, 1024](dQ, dE, batch, N)
         E = dE.copy_to_host()
 
-        print(datetime.now() - start)
-
+        print("total spend: ", datetime.now() - start)
+        print(E.mean())
         # break
 
     return E[:, 1:N, 1:N]
