@@ -16,6 +16,7 @@ class TMP:
 tmp = TMP()
 # def dilate_loss(outputs, targets, alpha=0.5, gamma=0.001):
 def dilate_loss(items, alpha=0.5, gamma=0.001):
+    start = datetime.now()
     # outputs, targets: shape (batch_size, N_output, 1)
     N = len(items[0])
 
@@ -25,20 +26,12 @@ def dilate_loss(items, alpha=0.5, gamma=0.001):
     for i in range(len(items)):
         start = datetime.now()
         tmp.ppp(f"{i}-> start")
-        D = np.zeros((len(items) - i - 1, N, N))
-        for j in range(i + 1, len(items)):
-            Dk = soft_dtw.pairwise_distances(
-                items[i].reshape(-1, 1),
-                items[j].reshape(-1, 1),
-            )
-            D[j - i - 1, :, :] = Dk
-        tmp.ppp(f"{i}-> init \t")
 
-        paths = path_soft_dtw.compute_dilate_path(D, gamma)
+        paths = path_soft_dtw.compute_dilate_path(gamma, items, len(items) - i - 1)
 
         tmp.ppp(f"{i}-> compute 1 \t")
         # D = pickle.load(open("D.pkl", "rb"))
-        loss_shapes = soft_dtw.compute_soft_dtw_batch(D, gamma)
+        loss_shapes = soft_dtw.compute_soft_dtw_batch(gamma, items, len(items) - i - 1)
         tmp.ppp(f"{i}-> compute 2 \t")
 
         for j in range(i + 1, len(items)):
@@ -57,3 +50,4 @@ def dilate_loss(items, alpha=0.5, gamma=0.001):
 
         tmp.ppp(f"{i}-> add loss \t")
         print("finish: ", datetime.now() - start)
+        print("time", datetime.now() - start)

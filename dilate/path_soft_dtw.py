@@ -10,26 +10,31 @@ gamma = 0.001
 
 @cuda.jit
 # def cuda_compute2(V, Q, l, theta, iiii):
-def cuda_compute2(V, Q, l, theta, part):
-    bi = cuda.blockIdx.x
-    # bi = 0
+def cuda_compute2(items, V, Q, l, part):
     iiii = cuda.threadIdx.x
 
     if iiii >= l:
         return
-
-    V = V[bi]
-    Q = Q[bi]
-    V[1:, 0] = 1e10
-    V[0, 1:] = 1e10
-    theta = theta[bi]
-
     if part == 1:
         y = iiii + 1
         x = l - y + 1
     elif part == 2:
         x = TIMESTEPS + 1 - l + iiii
         y = 2 * TIMESTEPS - l - x + 1
+    bi = cuda.blockIdx.x
+
+    item_i_idx = len(items) - cuda.gridDim.x - 1
+    item_j_idx = item_i_idx + 1 + bi
+
+    item_i = items[item_i_idx][x - 1]
+    item_j = items[item_j_idx][y - 1]
+    theta_v = (item_i - item_j) ** 2
+    # theta_v = max(theta_v, 0.0)
+
+    V = V[bi]
+    Q = Q[bi]
+    V[1:, 0] = 1e10
+    V[0, 1:] = 1e10
 
     arr0 = -V[x, y - 1]
     arr1 = -V[x - 1, y - 1]
@@ -43,16 +48,14 @@ def cuda_compute2(V, Q, l, theta, part):
     arr2 = math.exp((arr2 - my_min_max_x) / gamma)
     # exp_x = np.exp((x - max_x) / gamma)
     my_min_Z = arr0 + arr1 + arr2
-    arr0 /= my_min_Z
-    arr1 /= my_min_Z
-    arr2 /= my_min_Z
     v = -(gamma * math.log(my_min_Z) + my_min_max_x)
 
-    Q[x, y, 0] = arr0
-    Q[x, y, 1] = arr1
-    Q[x, y, 2] = arr2
+    Q[x, y, 0] = arr0 / my_min_Z
+    Q[x, y, 1] = arr1 / my_min_Z
+    Q[x, y, 2] = arr2 / my_min_Z
 
-    V[x, y] = v + theta[x - 1, y - 1]
+    # V[x, y] = v + theta[x - 1, y - 1]
+    V[x, y] = v + theta_v
 
 
 @cuda.jit
@@ -60,6 +63,10 @@ def cuda_E(Q, E, batch, N):
     x = cuda.grid(1)
     if x >= batch:
         return
+
+    E[x, N, :] = 0
+    E[x, :, N] = 0
+    E[x, N, N] = 1
 
     Q[x, N, N] = 1
     for i in range(N - 1, 0, -1):
@@ -84,49 +91,56 @@ class TMP:
 tmp = TMP()
 
 
-def compute_dilate_path(theta, gamma=0.001):
+def compute_dilate_path(gamma=0.001, items=None, batch=None):
     # GRID_SIZE = 400_000
     # GRID_SIZE = 1
     while True:
         tmp.ppp(1)
         start = datetime.now()
-        batch = theta.shape[0]
 
-        N = theta.shape[1] + 1
+        N = len(items[0]) + 1
 
-        dV = nb.cuda.device_array(shape=(batch, N, N))
-        dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3))
-        dtheta = cuda.to_device(theta)
+        items = np.array(items).astype("float32")
+        ditems = nb.cuda.to_device(items)
+        dV = nb.cuda.device_array(shape=(batch, N, N), dtype=np.float32)
+        dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3), dtype=np.float32)
+        # dtheta = cuda.to_device(theta)
 
         print("cp mem", datetime.now() - start)
         # continue
 
-        s = 1024
-
         for i in range(1, N):
-            cuda_compute2[batch, i](dV, dQ, i, dtheta, 1)
+            cuda_compute2[batch, i](ditems, dV, dQ, i, 1)
 
         nb.cuda.synchronize()
 
         for i in range(N - 1, 0, -1):
-            cuda_compute2[batch, i](dV, dQ, i, dtheta, 2)
+            cuda_compute2[batch, i](ditems, dV, dQ, i, 2)
 
-        # V = dV.copy_to_host()
-        # Q = dQ.copy_to_host()
         nb.cuda.synchronize()
 
-        E = np.zeros((batch, N + 1, N + 1))
-        E[:, N, :] = 0
-        E[:, :, N] = 0
-        E[:, N, N] = 1
+        dE = nb.cuda.device_array(shape=(batch, N + 1, N + 1), dtype=np.float32)
+        # E = np.zeros((batch, N + 1, N + 1))
+        # E[:, N, :] = 0
+        # E[:, :, N] = 0
+        # E[:, N, N] = 1
 
-        dE = cuda.to_device(E)
+        # dE = cuda.to_device(E)
 
+        # Q = dQ.copy_to_host()
+        # Q[0, N, N] = 1
+        # for i in range(N - 1, 0, -1):
+        #     for j in range(N - 1, 0, -1):
+        #         E[0, i, j] = (
+        #             Q[0, i, j + 1, 0] * E[0, i, j + 1]
+        #             + Q[0, i + 1, j + 1, 1] * E[0, i + 1, j + 1]
+        #             + Q[0, i + 1, j, 2] * E[0, i + 1, j]
+        #         )
         cuda_E[batch // 1024 + 1, 1024](dQ, dE, batch, N)
         E = dE.copy_to_host()
 
         print("total spend: ", datetime.now() - start)
         print(E.mean())
-        # break
+        break
 
     return E[:, 1:N, 1:N]

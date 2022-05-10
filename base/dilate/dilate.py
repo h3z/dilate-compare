@@ -44,7 +44,7 @@ def dilate_loss(alpha, gamma, device="cpu"):
         loss_temporal = torch.sum(path * Omega) / (N_output * N_output)
         loss = alpha * loss_shape + (1 - alpha) * loss_temporal
         # return loss, loss_shape, loss_temporal
-        return loss
+        return loss, path, loss_shape
 
     return dilate_loss_
 
