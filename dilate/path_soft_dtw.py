@@ -21,24 +21,27 @@ def cuda_compute2(items, V, Q, l, part):
     elif part == 2:
         x = TIMESTEPS + 1 - l + iiii
         y = 2 * TIMESTEPS - l - x + 1
+
     bi = cuda.blockIdx.x
+    Q = Q[bi]
+    V = V[bi]
+    V[1:, 0] = 1e10
+    V[0, 1:] = 1e10
 
     item_i_idx = len(items) - cuda.gridDim.x - 1
     item_j_idx = item_i_idx + 1 + bi
 
-    item_i = items[item_i_idx][x - 1]
-    item_j = items[item_j_idx][y - 1]
+    item_i = items[item_i_idx][y - 1]
+    item_j = items[item_j_idx][x - 1]
     theta_v = (item_i - item_j) ** 2
     # theta_v = max(theta_v, 0.0)
-
-    V = V[bi]
-    Q = Q[bi]
-    V[1:, 0] = 1e10
-    V[0, 1:] = 1e10
 
     arr0 = -V[x, y - 1]
     arr1 = -V[x - 1, y - 1]
     arr2 = -V[x - 1, y]
+
+    # V[x, y] = min(-arr0, -arr1, -arr2) + theta_v
+
     # my min
     # use the log-sum-exp trick
     my_min_max_x = max(arr0, arr1, arr2)
@@ -95,19 +98,13 @@ def compute_dilate_path(gamma=0.001, items=None, batch=None):
     # GRID_SIZE = 400_000
     # GRID_SIZE = 1
     while True:
-        tmp.ppp(1)
-        start = datetime.now()
-
         N = len(items[0]) + 1
 
-        items = np.array(items).astype("float32")
+        items = np.array(items).astype("float64")
         ditems = nb.cuda.to_device(items)
-        dV = nb.cuda.device_array(shape=(batch, N, N), dtype=np.float32)
-        dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3), dtype=np.float32)
+        dV = nb.cuda.device_array(shape=(batch, N, N), dtype=np.float64)
+        dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3), dtype=np.float64)
         # dtheta = cuda.to_device(theta)
-
-        print("cp mem", datetime.now() - start)
-        # continue
 
         for i in range(1, N):
             cuda_compute2[batch, i](ditems, dV, dQ, i, 1)
@@ -119,28 +116,9 @@ def compute_dilate_path(gamma=0.001, items=None, batch=None):
 
         nb.cuda.synchronize()
 
-        dE = nb.cuda.device_array(shape=(batch, N + 1, N + 1), dtype=np.float32)
-        # E = np.zeros((batch, N + 1, N + 1))
-        # E[:, N, :] = 0
-        # E[:, :, N] = 0
-        # E[:, N, N] = 1
-
-        # dE = cuda.to_device(E)
-
-        # Q = dQ.copy_to_host()
-        # Q[0, N, N] = 1
-        # for i in range(N - 1, 0, -1):
-        #     for j in range(N - 1, 0, -1):
-        #         E[0, i, j] = (
-        #             Q[0, i, j + 1, 0] * E[0, i, j + 1]
-        #             + Q[0, i + 1, j + 1, 1] * E[0, i + 1, j + 1]
-        #             + Q[0, i + 1, j, 2] * E[0, i + 1, j]
-        #         )
+        dE = nb.cuda.device_array(shape=(batch, N + 1, N + 1), dtype=np.float64)
         cuda_E[batch // 1024 + 1, 1024](dQ, dE, batch, N)
         E = dE.copy_to_host()
-
-        print("total spend: ", datetime.now() - start)
-        print(E.mean())
         break
 
     return E[:, 1:N, 1:N]

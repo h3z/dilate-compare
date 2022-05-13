@@ -68,11 +68,4 @@ def compute_soft_dtw_batch(gamma=0.001, items=None, batch_size=None):
     compute_softdtw2[batch_size // 1024 + 1, 1024](
         cuda.to_device(items), dR, losses, batch_size
     )
-    # compute_softdtw2(D, R, losses)
     return losses
-
-    # for k in range(0, batch_size):  # loop over all D in the batch
-    #     Rk = compute_softdtw2(D[k, :, :], gamma, R)
-    #     R[k : k + 1, :, :] = Rk
-    #     total_loss = total_loss + Rk[-2, -2]
-    # return total_loss / batch_size
