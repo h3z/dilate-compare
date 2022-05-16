@@ -3,6 +3,7 @@ import torch, pickle
 from datetime import datetime
 import numpy as np
 from numba import cuda
+import numba as nb
 
 
 class TMP:
@@ -15,21 +16,24 @@ class TMP:
         self.aaa = datetime.now()
 
 
-def loss_add(loss_shapes, paths, losses, N, alpha):
+@cuda.jit
+def loss_add(loss_shapes, paths, losses, omega, N, alpha):
     idx = cuda.grid(1)
     if idx >= len(loss_shapes):
         return
 
     loss_shape = loss_shapes[idx]
-    path = paths[idx]
+    path = paths[idx][1:-1, 1:-1]
 
-    omega = np.array(range(1, N + 1)).reshape(N, 1)
-    Omega = soft_dtw.pairwise_distances(omega)
+    sum = 0
+    for i in range(len(path)):
+        for j in range(len(path[0])):
+            sum += path[i, j] * omega[i, j]
 
-    loss_temporal = np.sum(path * Omega) / (N * N)
+    loss_temporal = sum / N / N
     loss = alpha * loss_shape + (1 - alpha) * loss_temporal
-    # return loss, loss_shape, loss_temporal
-    losses[i, j] = loss
+    losses[idx] = loss
+    # losses[idx] = loss_temporal
 
 
 tmp = TMP()
@@ -39,34 +43,32 @@ def dilate_loss(items, alpha=0.5, gamma=0.001):
     # outputs, targets: shape (batch_size, N_output, 1)
     N = len(items[0])
 
-    loss_shape = 0
-
     losses = np.zeros((len(items), len(items)))
+    omega = np.array(range(1, N + 1)).reshape(N, 1)
+    omega = soft_dtw.pairwise_distances(omega)
+    domega = cuda.to_device(omega)
     for i in range(len(items)):
         start = datetime.now()
         tmp.ppp()
 
-        batch_size = len(items) - 1 - 1
+        batch_size = len(items) - i - 1
         paths = path_soft_dtw.compute_dilate_path(gamma, items, batch_size)
         tmp.ppp(f"{i} 1:")
         loss_shapes = soft_dtw.compute_soft_dtw_batch(gamma, items, batch_size)
         tmp.ppp(f"{i} 2:")
+        dloss = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
+        loss_add[batch_size // 1024 + 1, 1024](
+            loss_shapes,
+            paths,
+            dloss,
+            domega,
+            N,
+            0.5,
+        )
+        losses_i = dloss.copy_to_host()
 
-        
-        loss_add[batch_size // 1024 + 1, 1024](loss_shapes, paths, losses, N, alpha=0.5)
-        for j in range(i + 1, len(items)):
-            
-            # idx = j - i - 1
-
-            # loss_shape = loss_shapes[idx]
-            # path = paths[idx]
-
-            # omega = np.array(range(1, N + 1)).reshape(N, 1)
-            # Omega = soft_dtw.pairwise_distances(omega)
-            # loss_temporal = np.sum(path * Omega) / (N * N)
-            # loss = alpha * loss_shape + (1 - alpha) * loss_temporal
-            # # return loss, loss_shape, loss_temporal
-            # losses[i, j] = loss
+        for j in range(batch_size):
+            losses[i, j + i + 1] = losses_i[j]
 
         tmp.ppp(f"{i} 3:")
         print(f"-> {datetime.now() - start}")

@@ -24,12 +24,12 @@ if __name__ == "__main__":
 
     batch = 1
 
-    loss_values = []
-    loss_shapes = []
-    paths = []
     start = datetime.now()
     for i, _ in enumerate(windows):
-        for j, _ in enumerate(windows[i + 1 :][:10]):
+        loss_values = []
+        loss_shapes = []
+        paths = []
+        for j in range(i + 1, i + 11):
             print(j)
             item_i = (
                 torch.tensor(windows[i : i + batch], requires_grad=True)
@@ -37,7 +37,7 @@ if __name__ == "__main__":
                 .view(batch, -1, 1)
             )
             item_j = (
-                torch.tensor(windows[j + 1 : j + 1 + batch], requires_grad=True)
+                torch.tensor(windows[j : j + batch], requires_grad=True)
                 .to("cuda")
                 .view(batch, -1, 1)
             )
@@ -47,7 +47,6 @@ if __name__ == "__main__":
             loss_values.append(loss_value.item())
             # mse(i, j)
             # l.backward()
-        break
 
-    print("time", datetime.now() - start)
-    print("time")
+        print("time", datetime.now() - start)
+        print("time")

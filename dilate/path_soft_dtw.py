@@ -4,7 +4,6 @@ from numba import jit, cuda
 import numba as nb
 from datetime import datetime
 
-TIMESTEPS = 144
 gamma = 0.001
 
 
@@ -12,13 +11,13 @@ gamma = 0.001
 # def cuda_compute2(V, Q, l, theta, iiii):
 def cuda_compute2(items, V, Q, l, part):
     iiii = cuda.threadIdx.x
-
     if iiii >= l:
         return
     if part == 1:
         y = iiii + 1
         x = l - y + 1
     elif part == 2:
+        TIMESTEPS = len(items[0])
         x = TIMESTEPS + 1 - l + iiii
         y = 2 * TIMESTEPS - l - x + 1
 
@@ -118,7 +117,8 @@ def compute_dilate_path(gamma=0.001, items=None, batch=None):
 
         dE = nb.cuda.device_array(shape=(batch, N + 1, N + 1), dtype=np.float64)
         cuda_E[batch // 1024 + 1, 1024](dQ, dE, batch, N)
-        E = dE.copy_to_host()
+        # E = dE.copy_to_host()
         break
 
-    return E[:, 1:N, 1:N]
+    # return E[:, 1:N, 1:N]
+    return dE

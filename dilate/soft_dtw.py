@@ -2,6 +2,7 @@ import numpy as np
 import torch, math
 from numba import jit, cuda
 from torch.autograd import Function
+import numba as nb
 
 gamma = 0.001
 
@@ -44,7 +45,11 @@ def compute_softdtw2(items, R, losses, batch_size):
         return
 
     R = R[x]
+    for i in range(len(R)):
+        for j in range(len(R[0])):
+            R[i, j] = 1e8
     R[0, 0] = 0.0
+
     N = len(items[0])
 
     for j in range(1, N + 1):
@@ -62,10 +67,11 @@ def compute_softdtw2(items, R, losses, batch_size):
 def compute_soft_dtw_batch(gamma=0.001, items=None, batch_size=None):
     N = len(items[0])
 
-    R = np.zeros((batch_size, N + 2, N + 2)) + 1e8
-    losses = np.zeros(batch_size)
-    dR = cuda.to_device(R)
+    # R = np.zeros((batch_size, N + 2, N + 2)) + 1e8
+    # dR = cuda.to_device(R)
+    dR = nb.cuda.device_array(shape=(batch_size, N + 2, N + 2), dtype=np.float64)
+    dlosses = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
     compute_softdtw2[batch_size // 1024 + 1, 1024](
-        cuda.to_device(items), dR, losses, batch_size
+        cuda.to_device(items), dR, dlosses, batch_size
     )
-    return losses
+    return dlosses
