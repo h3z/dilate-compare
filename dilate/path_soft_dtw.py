@@ -5,38 +5,29 @@ from numba import jit, cuda
 import numba as nb
 from datetime import datetime
 import pickle
+from settings import FLOAT_TYPE
 
 gamma = 0.001
 
 CONSTANT_N = 145
 
 
-@cuda.jit
-def cuda_compute2(
-    items,
-    Q,
-    batch_size,
-):
-    idx = cuda.grid(1)
-    L, N = items.shape
-    N += 1
-    item_i_idx = L - batch_size - 1
-    item_j_idx = item_i_idx + 1 + idx
-    if item_j_idx >= L:
-        return
 
-    Q = Q[idx]
-    V_pre = cuda.local.array(CONSTANT_N, nb.float64)
-    V = cuda.local.array(CONSTANT_N, nb.float64)
+@cuda.jit(device=True)
+def i_j_path(Q, item_1, item_2):
+    N = len(item_1) + 1
+
+    V_pre = cuda.local.array(CONSTANT_N, FLOAT_TYPE)
+    V = cuda.local.array(CONSTANT_N, FLOAT_TYPE)
 
     V_pre[1:] = 1e10
     V_pre[0] = 0
     V[0] = 1e10
 
     for x in range(1, N):
-        item_j = items[item_j_idx][x - 1]
+        item_j = item_1[x - 1]
         for y in range(1, N):
-            item_i = items[item_i_idx][y - 1]
+            item_i = item_2[y - 1]
             theta_v = (item_i - item_j) ** 2
 
             arr0 = -V[y - 1]
@@ -60,17 +51,46 @@ def cuda_compute2(
 
 
 @cuda.jit
-def cuda_E(Q, E, batch, N):
+def cuda_compute2(
+    items,
+    Q,
+    row,
+):
+    idx = cuda.grid(1)
+    L = items.shape[0]
+
+    if idx >= L:
+        return
+    else:
+        Q = Q[idx]
+
+    size = L - row - 1
+    if idx >= size:
+        size = L - size
+        idx = idx - size
+
+    item_i_idx = row
+    item_j_idx = item_i_idx + 1 + idx
+    item_1 = items[item_j_idx]
+    item_2 = items[item_i_idx]
+
+    i_j_path(Q, item_1, item_2)
+
+
+@cuda.jit
+def cuda_E(Q, E, N):
     x = cuda.grid(1)
-    if x >= batch:
+    if x >= len(E):
         return
 
     E = E[x]
     E[N, :] = 0
     E[:, N] = 0
     E[N, N] = 1
+
     Q = Q[x]
     Q[N, N] = 1
+
     for i in range(N - 1, 0, -1):
         for j in range(N - 1, 0, -1):
             E[i, j] = (
@@ -93,16 +113,16 @@ class TMP:
 tmp = TMP()
 
 
-def compute_dilate_path(gamma=0.001, ditems=None, batch=None):
-    N = ditems.shape[1] + 1
+def compute_dilate_path(gamma=0.001, ditems=None, row=None):
+    L, N = ditems.shape
 
-    dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3), dtype=np.float64)
-    dE = nb.cuda.device_array(shape=(batch, N + 1, N + 1), dtype=np.float64)
-
-    cuda_compute2[batch // 512 + 1, 512](ditems, dQ, batch)
+    # 这里都把 batch 改成 L，按L来。前边是row行的L-row-1个，后边是 倒数 row 行的那些 row +1 个，合计L个。
+    dQ = nb.cuda.device_array(shape=(L, N + 2, N + 2, 3), dtype=FLOAT_TYPE)
+    dE = nb.cuda.device_array(shape=(L, N + 2, N + 2), dtype=FLOAT_TYPE)
+    cuda_compute2[L // 512 + 1, 512](ditems, dQ, row)
     nb.cuda.synchronize()
 
-    cuda_E[batch // 512 + 1, 512](dQ, dE, batch, N)
+    cuda_E[L // 512 + 1, 512](dQ, dE, N + 1)
     nb.cuda.synchronize()
 
     return dE
