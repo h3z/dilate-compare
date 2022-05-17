@@ -4,6 +4,7 @@ from datetime import datetime
 import numpy as np
 from numba import cuda
 import numba as nb
+from tqdm.auto import tqdm
 
 
 class TMP:
@@ -38,7 +39,7 @@ def loss_add(loss_shapes, paths, losses, omega, N, alpha):
 
 tmp = TMP()
 # def dilate_loss(outputs, targets, alpha=0.5, gamma=0.001):
-def dilate_loss(items, alpha=0.5, gamma=0.001):
+def dilate_loss(items, worker_n, alpha=0.5, gamma=0.001):
     start = datetime.now()
     # outputs, targets: shape (batch_size, N_output, 1)
     N = len(items[0])
@@ -47,14 +48,20 @@ def dilate_loss(items, alpha=0.5, gamma=0.001):
     omega = np.array(range(1, N + 1)).reshape(N, 1)
     omega = soft_dtw.pairwise_distances(omega)
     domega = cuda.to_device(omega)
-    for i in range(len(items)):
+
+    items = np.array(items).astype("float64")
+    ditems = nb.cuda.to_device(items)
+    worker_n = 0
+    for i in tqdm(range(worker_n, len(items) - 1, 7)):
         start = datetime.now()
         tmp.ppp()
 
         batch_size = len(items) - i - 1
-        paths = path_soft_dtw.compute_dilate_path(gamma, items, batch_size)
+
+        paths = path_soft_dtw.compute_dilate_path(gamma, ditems, batch_size)
         tmp.ppp(f"{i} 1:")
-        loss_shapes = soft_dtw.compute_soft_dtw_batch(gamma, items, batch_size)
+
+        loss_shapes = soft_dtw.compute_soft_dtw_batch(gamma, ditems, batch_size)
         tmp.ppp(f"{i} 2:")
         dloss = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
         loss_add[batch_size // 1024 + 1, 1024](
@@ -69,6 +76,7 @@ def dilate_loss(items, alpha=0.5, gamma=0.001):
 
         for j in range(batch_size):
             losses[i, j + i + 1] = losses_i[j]
-
         tmp.ppp(f"{i} 3:")
-        print(f"-> {datetime.now() - start}")
+        print(f"-> {str(datetime.now() - start)[6:]}")
+
+    pickle.dump(losses, open(f"/losses_0517_{worker_n}.pkl", "wb"))

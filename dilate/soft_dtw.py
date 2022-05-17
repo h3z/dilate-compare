@@ -69,4 +69,5 @@ def compute_soft_dtw_batch(gamma=0.001, ditems=None, batch_size=None):
     dR = nb.cuda.device_array(shape=(batch_size, N + 2, N + 2), dtype=np.float64)
     dlosses = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
     compute_softdtw2[batch_size // 1024 + 1, 1024](ditems, dR, dlosses, batch_size)
+    nb.cuda.synchronize()
     return dlosses

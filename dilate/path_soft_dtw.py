@@ -99,7 +99,10 @@ def compute_dilate_path(gamma=0.001, ditems=None, batch=None):
     dQ = nb.cuda.device_array(shape=(batch, N + 1, N + 1, 3), dtype=np.float64)
     dE = nb.cuda.device_array(shape=(batch, N + 1, N + 1), dtype=np.float64)
 
-    cuda_compute2[batch // 1024 + 1, 1024](ditems, dQ, batch)
-    cuda_E[batch // 1024 + 1, 1024](dQ, dE, batch, N)
+    cuda_compute2[batch // 512 + 1, 512](ditems, dQ, batch)
+    nb.cuda.synchronize()
+
+    cuda_E[batch // 512 + 1, 512](dQ, dE, batch, N)
+    nb.cuda.synchronize()
 
     return dE
