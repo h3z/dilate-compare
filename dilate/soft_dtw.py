@@ -45,9 +45,8 @@ def compute_softdtw2(items, R, losses, batch_size):
         return
 
     R = R[x]
-    for i in range(len(R)):
-        for j in range(len(R[0])):
-            R[i, j] = 1e8
+    R[0, 1:] = 1e8
+    R[1:, 0] = 1e8
     R[0, 0] = 0.0
 
     N = len(items[0])
@@ -57,21 +56,17 @@ def compute_softdtw2(items, R, losses, batch_size):
             r0 = -R[i - 1, j - 1] / gamma
             r1 = -R[i - 1, j] / gamma
             r2 = -R[i, j - 1] / gamma
-            rmax = max(max(r0, r1), r2)
+            rmax = max(r0, r1, r2)
             rsum = math.exp(r0 - rmax) + math.exp(r1 - rmax) + math.exp(r2 - rmax)
             softmin = -1.0 * gamma * (math.log(rsum) + rmax)
             R[i, j] = (item_i[i - 1] - item_j[j - 1]) ** 2 + softmin
     losses[x] = R[-2, -2]
 
 
-def compute_soft_dtw_batch(gamma=0.001, items=None, batch_size=None):
-    N = len(items[0])
+def compute_soft_dtw_batch(gamma=0.001, ditems=None, batch_size=None):
+    N = ditems.shape[1]
 
-    # R = np.zeros((batch_size, N + 2, N + 2)) + 1e8
-    # dR = cuda.to_device(R)
     dR = nb.cuda.device_array(shape=(batch_size, N + 2, N + 2), dtype=np.float64)
     dlosses = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
-    compute_softdtw2[batch_size // 1024 + 1, 1024](
-        cuda.to_device(items), dR, dlosses, batch_size
-    )
+    compute_softdtw2[batch_size // 1024 + 1, 1024](ditems, dR, dlosses, batch_size)
     return dlosses
