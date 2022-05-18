@@ -65,14 +65,13 @@ def compute_softdtw2(items, R, losses, row):
 
     size = L - row - 1
     if idx >= size:
-        size = L - size
         idx = idx - size
+        row = L - row - 2
 
     item_i_idx = row
     item_j_idx = item_i_idx + 1 + idx
     item_j = items[item_j_idx]
     item_i = items[item_i_idx]
-
 
     losses[origin_idx] = i_j_loss(R, item_i, item_j)
 

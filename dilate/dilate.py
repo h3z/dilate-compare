@@ -8,6 +8,7 @@ from tqdm.auto import tqdm
 from settings import FLOAT_TYPE
 
 alpha = 0.5
+# alpha = 0
 
 
 class TMP:
@@ -57,9 +58,11 @@ def dilate_loss(items, worker_n, alpha=0.5, gamma=0.001):
 
     items = np.array(items).astype(FLOAT_TYPE)
     ditems = nb.cuda.to_device(items)
-    worker_n = 0
+    if worker_n is None:
+        worker_n = 0
 
     n_gpu = 7
+    # for row in range(worker_n, worker_n + 1):
     for row in tqdm(range(worker_n, (len(items) - 1) // 2, n_gpu)):
         start = datetime.now()
 
@@ -84,6 +87,7 @@ def dilate_loss(items, worker_n, alpha=0.5, gamma=0.001):
         for j in range(L - row - 1, L):
             losses[L - row - 2, j] = losses_rows[j]
 
-        print(f"-> {str(datetime.now() - start)[6:]}")
+        # print(f"-> {str(datetime.now() - start)[6:]}")
 
-    pickle.dump(losses, open(f"/losses_0517_{worker_n}.pkl", "wb"))
+    # pickle.dump(losses, open(f"losses_0517_{worker_n}.pkl", "wb"))
+    return losses

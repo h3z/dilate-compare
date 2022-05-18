@@ -29,7 +29,7 @@ def my_min_hessian_product(p, z, gamma):
     return -my_max_hessian_product(p, z, gamma)
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def dtw_grad(theta, gamma):
     m = theta.shape[0]
     n = theta.shape[1]

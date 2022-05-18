@@ -66,8 +66,8 @@ def cuda_compute2(
 
     size = L - row - 1
     if idx >= size:
-        size = L - size
         idx = idx - size
+        row = L - row - 2
 
     item_i_idx = row
     item_j_idx = item_i_idx + 1 + idx
