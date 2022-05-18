@@ -12,13 +12,12 @@ gamma = 0.001
 CONSTANT_N = 145
 
 
-
 @cuda.jit(device=True)
 def i_j_path(Q, item_1, item_2):
     N = len(item_1) + 1
 
-    V_pre = cuda.local.array(CONSTANT_N, FLOAT_TYPE)
-    V = cuda.local.array(CONSTANT_N, FLOAT_TYPE)
+    V_pre = cuda.local.array(CONSTANT_N, "float64")
+    V = cuda.local.array(CONSTANT_N, "float64")
 
     V_pre[1:] = 1e10
     V_pre[0] = 0
