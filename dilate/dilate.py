@@ -5,6 +5,10 @@ import numpy as np
 from numba import cuda
 import numba as nb
 from tqdm.auto import tqdm
+from settings import FLOAT_TYPE
+
+alpha = 0.5
+# alpha = 0
 
 
 class TMP:
@@ -18,11 +22,11 @@ class TMP:
 
 
 @cuda.jit
-def loss_add(loss_shapes, paths, losses, omega, N, alpha):
+def loss_add(loss_shapes, paths, losses, omega):
     idx = cuda.grid(1)
     if idx >= len(loss_shapes):
         return
-
+    N = len(omega)
     loss_shape = loss_shapes[idx]
     path = paths[idx][1:-1, 1:-1]
 
@@ -42,6 +46,9 @@ tmp = TMP()
 def dilate_loss(items, worker_n, alpha=0.5, gamma=0.001):
     start = datetime.now()
     # outputs, targets: shape (batch_size, N_output, 1)
+    # 按奇数处理，剩下的一个不要了。
+    items = items[:-1]
+    L = len(items)
     N = len(items[0])
 
     losses = np.zeros((len(items), len(items)))
@@ -49,34 +56,38 @@ def dilate_loss(items, worker_n, alpha=0.5, gamma=0.001):
     omega = soft_dtw.pairwise_distances(omega)
     domega = cuda.to_device(omega)
 
-    items = np.array(items).astype("float64")
+    items = np.array(items).astype(FLOAT_TYPE)
     ditems = nb.cuda.to_device(items)
-    worker_n = 0
-    for i in tqdm(range(worker_n, len(items) - 1, 7)):
+    if worker_n is None:
+        worker_n = 0
+
+    n_gpu = 7
+    # for row in range(worker_n, worker_n + 1):
+    for row in tqdm(range(worker_n, (len(items) - 1) // 2, n_gpu)):
         start = datetime.now()
-        tmp.ppp()
 
-        batch_size = len(items) - i - 1
+        # 前边部分是第 row 行。后边部分是第 L - row 行
+        paths = path_soft_dtw.compute_dilate_path(gamma, ditems, row)
+        assert paths.shape[0] == L
 
-        paths = path_soft_dtw.compute_dilate_path(gamma, ditems, batch_size)
-        tmp.ppp(f"{i} 1:")
+        loss_shapes = soft_dtw.compute_soft_dtw_batch(gamma, ditems, row)
+        assert loss_shapes.shape[0] == L
 
-        loss_shapes = soft_dtw.compute_soft_dtw_batch(gamma, ditems, batch_size)
-        tmp.ppp(f"{i} 2:")
-        dloss = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
-        loss_add[batch_size // 1024 + 1, 1024](
+        dloss = nb.cuda.device_array(shape=(L), dtype=FLOAT_TYPE)
+        loss_add[L // 512 + 1, 512](
             loss_shapes,
             paths,
             dloss,
             domega,
-            N,
-            0.5,
         )
-        losses_i = dloss.copy_to_host()
+        losses_rows = dloss.copy_to_host()
 
-        for j in range(batch_size):
-            losses[i, j + i + 1] = losses_i[j]
-        tmp.ppp(f"{i} 3:")
-        print(f"-> {str(datetime.now() - start)[6:]}")
+        for j in range(L - row - 1):
+            losses[row, j + row + 1] = losses_rows[j]
+        for j in range(L - row - 1, L):
+            losses[L - row - 2, j] = losses_rows[j]
 
-    pickle.dump(losses, open(f"/losses_0517_{worker_n}.pkl", "wb"))
+        # print(f"-> {str(datetime.now() - start)[6:]}")
+
+    # pickle.dump(losses, open(f"losses_0517_{worker_n}.pkl", "wb"))
+    return losses

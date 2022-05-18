@@ -3,6 +3,7 @@ import torch, math
 from numba import jit, cuda
 from torch.autograd import Function
 import numba as nb
+from settings import FLOAT_TYPE
 
 gamma = 0.001
 
@@ -32,24 +33,9 @@ def pairwise_distances(x, y=None):
     return np.clip(dist, 0.0, float("inf"))
 
 
-@cuda.jit
-def compute_softdtw2(items, R, losses, batch_size):
-    x = cuda.grid(1)
-
-    item_i_idx = len(items) - batch_size - 1
-    item_j_idx = item_i_idx + 1 + x
-
-    item_i = items[item_i_idx]
-    item_j = items[item_j_idx]
-    if item_j_idx >= len(items):
-        return
-
-    R = R[x]
-    R[0, 1:] = 1e8
-    R[1:, 0] = 1e8
-    R[0, 0] = 0.0
-
-    N = len(items[0])
+@cuda.jit(device=True)
+def i_j_loss(R, item_i, item_j):
+    N = len(item_i)
 
     for j in range(1, N + 1):
         for i in range(1, N + 1):
@@ -60,14 +46,42 @@ def compute_softdtw2(items, R, losses, batch_size):
             rsum = math.exp(r0 - rmax) + math.exp(r1 - rmax) + math.exp(r2 - rmax)
             softmin = -1.0 * gamma * (math.log(rsum) + rmax)
             R[i, j] = (item_i[i - 1] - item_j[j - 1]) ** 2 + softmin
-    losses[x] = R[-2, -2]
+    return R[-2, -2]
 
 
-def compute_soft_dtw_batch(gamma=0.001, ditems=None, batch_size=None):
-    N = ditems.shape[1]
+@cuda.jit
+def compute_softdtw2(items, R, losses, row):
+    idx = cuda.grid(1)
+    L = items.shape[0]
+    origin_idx = idx
 
-    dR = nb.cuda.device_array(shape=(batch_size, N + 2, N + 2), dtype=np.float64)
-    dlosses = nb.cuda.device_array(shape=(batch_size), dtype=np.float64)
-    compute_softdtw2[batch_size // 1024 + 1, 1024](ditems, dR, dlosses, batch_size)
+    if idx >= L:
+        return
+    else:
+        R = R[idx]
+        R[0, 1:] = 1e8
+        R[1:, 0] = 1e8
+        R[0, 0] = 0.0
+
+    size = L - row - 1
+    if idx >= size:
+        idx = idx - size
+        row = L - row - 2
+
+    item_i_idx = row
+    item_j_idx = item_i_idx + 1 + idx
+    item_j = items[item_j_idx]
+    item_i = items[item_i_idx]
+
+    losses[origin_idx] = i_j_loss(R, item_i, item_j)
+
+
+def compute_soft_dtw_batch(gamma=0.001, ditems=None, row=None):
+    L, N = ditems.shape
+
+    # 这里都把 batch 改成 L，按L来。前边是row行的L-row-1个，后边是 倒数 row 行的那些 row +1 个，合计L个。
+    dR = nb.cuda.device_array(shape=(L, N + 2, N + 2), dtype=FLOAT_TYPE)
+    dlosses = nb.cuda.device_array(shape=(L), dtype=FLOAT_TYPE)
+    compute_softdtw2[L // 512 + 1, 512](ditems, dR, dlosses, row)
     nb.cuda.synchronize()
     return dlosses

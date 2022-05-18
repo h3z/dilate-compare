@@ -24,7 +24,7 @@ def pairwise_distances(x, y=None):
     return torch.clamp(dist, 0.0, float("inf"))
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def compute_softdtw(D, gamma):
     N = D.shape[0]
     M = D.shape[1]
